@@ -1,0 +1,331 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: create VPC
+Metadata:
+  Name: first VPC via cf
+  version: 1.1.1
+
+Parameters:
+  myKeyPair:
+    Description: Amazon EC2 Key Pair
+    Type: "AWS::EC2::KeyPair::KeyName"
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - m1.small
+      - m1.large
+    Description: Enter t2.micro, m1.small, or m1.large. Default is t2.micro.
+
+Mappings:
+  AMIConfig:
+    us-east-1:
+      AMIId: ami-a4c7edb2
+    us-east-2:
+      AMIId: ami-8a7859ef
+    us-west-1:
+      AMIId: ami-327f5352
+    us-west-2:
+      AMIId: ami-6df1e514
+  CIDRConfig:
+    VPC:
+      CIDR: 10.0.0.0/16
+    Bastion:
+      CIDR: 10.0.1.0/28
+    Public1:
+      CIDR: 10.0.1.0/24
+    Public2:
+      CIDR: 10.0.20.0/24
+    Public3:
+      CIDR: 10.0.30.0/24
+    Private:
+      CIDR: 10.0.3.0/24
+
+
+Resources:
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Fn::FindInMap:
+        - CIDRConfig
+        - VPC
+        - CIDR
+      Tags:
+      - Key: env
+        Value: dev
+  mypublicsubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock:
+        Fn::FindInMap:
+        - CIDRConfig
+        - Public1
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      AvailabilityZone:
+        Fn::Select:
+         - 0
+         - Fn::GetAZs: ""
+      Tags:
+        - Key: function
+          Value: webserver
+  mypublicsubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock:
+        Fn::FindInMap:
+        - CIDRConfig
+        - Public2
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      AvailabilityZone:
+        Fn::Select:
+         - 1
+         - Fn::GetAZs: ""
+      Tags:
+        - Key: function
+          Value: webserver
+  mypublicsubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock:
+        Fn::FindInMap:
+        - CIDRConfig
+        - Public3
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      AvailabilityZone:
+        Fn::Select:
+         - 2
+         - Fn::GetAZs: ""
+      Tags:
+        - Key: function
+          Value: webserver
+
+  myprivatesubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref myVPC
+      CidrBlock:
+        Fn::FindInMap:
+        - CIDRConfig
+        - Private
+        - CIDR
+      AvailabilityZone:
+        Fn::Select:
+         - 1
+         - Fn::GetAZs: ""
+      Tags:
+         - Key: function
+           Value: appserver
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref myInternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+  mySubnetRouteTableAssociationPublic1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref mypublicsubnet1
+      RouteTableId: !Ref PublicRouteTable
+  mySubnetRouteTableAssociationPublic2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref mypublicsubnet2
+      RouteTableId: !Ref PublicRouteTable
+  mySubnetRouteTableAssociationPublic3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref mypublicsubnet3
+      RouteTableId: !Ref PublicRouteTable
+  myRouteIgw:
+    Type: AWS::EC2::Route
+    DependsOn: myInternetGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref myInternetGateway
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+  mySubnetRouteTableAssociationPrivate:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref myprivatesubnet
+      RouteTableId: !Ref PrivateRouteTable
+  NAT:
+    DependsOn: myInternetGateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+         - EIP
+         - AllocationId
+      SubnetId: !Ref mypublicsubnet1
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  myRouteNat:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NAT
+
+  ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:  
+      Subnets: 
+      - Ref: mypublicsubnet1
+      - Ref: mypublicsubnet2
+      - Ref: mypublicsubnet3
+      Listeners:
+      - LoadBalancerPort: '80'
+        InstancePort: '80'
+        Protocol: HTTP
+      HealthCheck:
+        Target:
+          Fn::Join:
+          - ''
+          - - 'HTTP:'
+            - '80'
+            - "/index.html"
+        HealthyThreshold: '3'
+        UnhealthyThreshold: '5'
+        Interval: '30'
+        Timeout: '5'
+      SecurityGroups:
+      - Ref: LoadBalancerSecurityGroup
+      Tags:
+      - Key: Name
+        Value: learning-webELB
+  
+  Ec2Instance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              httpd: []
+          files:
+            "/var/www/html/index.html":
+              content:
+                Fn::Join:
+                - "\n"
+                - - Web Server Up
+                  - Ref: AWS::Region
+              mode: '000644'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              httpd:
+                enabled: 'true'
+                ensureRunning: 'true'
+    Properties:
+      ImageId:
+        Fn::FindInMap:
+        - AMIConfig
+        - Ref: AWS::Region
+        - AMIId
+      KeyName: !Ref myKeyPair
+      InstanceType: !Ref InstanceTypeParameter
+      SubnetId: !Ref mypublicsubnet1
+      SecurityGroupIds:
+      - Fn::GetAtt:
+         - myVPC
+         - DefaultSecurityGroup
+      - Ref: PublicSSHSecurityGroup
+      - Ref: WebSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "yum update -y aws-cfn-bootstrap\n"
+            - "/opt/aws/bin/cfn-init -v "
+            - "         --stack "
+            - Ref: AWS::StackName
+            - "         --resource Ec2Instance"
+            - "         --region "
+            - Ref: AWS::Region
+            - "\n"
+            - "/opt/aws/bin/cfn-signal -e $? "
+            - "         --stack "
+            - Ref: AWS::StackName
+            - "         --resource Ec2Instance "
+            - "         --region "
+            - Ref: AWS::Region
+            - "\n"
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP access
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: learning-LB-SG
+
+  PublicSSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH access
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: learning-PubSSH-SG
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP access from LB
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: "-1"
+        FromPort: "-1"
+        ToPort: "-1"
+        SourceSecurityGroupId:
+          Fn::GetAtt:
+          - myVPC
+          - DefaultSecurityGroup
+      Tags:
+      - Key: Name
+        Value: learning-WebSrv-SG
+Outputs:
+  Ec2instancePublicIP:
+    Description: Ec2 host public ip
+    Value:
+      Fn::GetAtt:
+      - Ec2Instance
+      - PublicIp
+  StackName:
+    Description: Stack Name
+    Value: 
+      Ref: AWS::StackName
+
