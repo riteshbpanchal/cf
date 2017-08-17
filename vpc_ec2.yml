@@ -137,7 +137,28 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NAT
   Ec2Instance:
-    Type: "AWS::EC2::Instance"
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          packages:
+            yum:
+              httpd: []
+          files:
+            "/var/www/html/index.html":
+              content:
+                Fn::Join:
+                - "\n"
+                - - Web Server Up
+                  - Ref: AWS::Region
+              mode: '000644'
+              owner: root
+              group: root
+          services:
+            sysvinit:
+              httpd:
+                enabled: 'true'
+                ensureRunning: 'true'
     Properties:
       ImageId:
         Fn::FindInMap:
@@ -152,6 +173,27 @@ Resources:
          - myVPC
          - DefaultSecurityGroup
       - Ref: PublicSSHSecurityGroup
+      - Ref: WebSecurityGroup
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "yum update -y aws-cfn-bootstrap\n"
+            - "/opt/aws/bin/cfn-init -v "
+            - "         --stack "
+            - Ref: AWS::StackName
+            - "         --resource Ec2Instance"
+            - "         --region "
+            - Ref: AWS::Region
+            - "\n"
+            - "/opt/aws/bin/cfn-signal -e $? "
+            - "         --stack "
+            - Ref: AWS::StackName
+            - "         --resource Ec2Instance "
+            - "         --region "
+            - Ref: AWS::Region
+            - "\n"
   PublicSSHSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -162,6 +204,16 @@ Resources:
         FromPort: '22'
         ToPort: '22'
         CidrIp: 0.0.0.0/0
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP access
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
 Outputs:
   Ec2instancePublicIP:
     Description: Ec2 host public ip
@@ -169,4 +221,8 @@ Outputs:
       Fn::GetAtt:
       - Ec2Instance
       - PublicIp
+  StackName:
+    Description: Stack Name
+    Value: 
+      Ref: AWS::StackName
 
