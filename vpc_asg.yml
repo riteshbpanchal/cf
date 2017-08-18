@@ -212,8 +212,8 @@ Resources:
       - Key: Name
         Value: learning-webELB
   
-  Ec2Instance:
-    Type: AWS::EC2::Instance
+  WebServerLaunchConfig:
+    Type: "AWS::AutoScaling::LaunchConfiguration"
     Metadata:
       AWS::CloudFormation::Init:
         config:
@@ -243,8 +243,7 @@ Resources:
         - AMIId
       KeyName: !Ref myKeyPair
       InstanceType: !Ref InstanceTypeParameter
-      SubnetId: !Ref mypublicsubnet1
-      SecurityGroupIds:
+      SecurityGroups:
       - Fn::GetAtt:
          - myVPC
          - DefaultSecurityGroup
@@ -259,17 +258,32 @@ Resources:
             - "/opt/aws/bin/cfn-init -v "
             - "         --stack "
             - Ref: AWS::StackName
-            - "         --resource Ec2Instance"
+            - "         --resource WebServerLaunchConfig"
             - "         --region "
             - Ref: AWS::Region
             - "\n"
             - "/opt/aws/bin/cfn-signal -e $? "
             - "         --stack "
             - Ref: AWS::StackName
-            - "         --resource Ec2Instance "
+            - "         --resource WebServerAutoScalingGroup"
             - "         --region "
             - Ref: AWS::Region
             - "\n"
+ 
+  WebServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+      - Ref: mypublicsubnet1
+      - Ref: mypublicsubnet2
+      - Ref: mypublicsubnet3
+      LaunchConfigurationName: !Ref WebServerLaunchConfig
+      MinSize: '3'
+      MaxSize: '3'
+      DesiredCapacity: '3'
+      LoadBalancerNames:
+        - Ref: ElasticLoadBalancer
+
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -306,7 +320,7 @@ Resources:
       - IpProtocol: tcp
         FromPort: '80'
         ToPort: '80'
-        CidrIp: 0.0.0.0/0
+        SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
       - IpProtocol: "-1"
         FromPort: "-1"
         ToPort: "-1"
@@ -318,12 +332,6 @@ Resources:
       - Key: Name
         Value: learning-WebSrv-SG
 Outputs:
-  Ec2instancePublicIP:
-    Description: Ec2 host public ip
-    Value:
-      Fn::GetAtt:
-      - Ec2Instance
-      - PublicIp
   StackName:
     Description: Stack Name
     Value: 
